@@ -113,8 +113,18 @@ pegasus_https_port_t           tcp      5989
 ```
 [root@selinux ~]# systemctl restart nginx
 [root@selinux ~]# systemctl status nginx
-!
-!
+
+[root@selinux ~]# systemctl status nginx
+● nginx.service - The nginx HTTP and reverse proxy server
+   Loaded: loaded (/usr/lib/systemd/system/nginx.service; disabled; vendor preset: disabled)
+   Active: active (running) since Tue 2023-03-14 12:10:15 UTC; 12s ago
+  Process: 3888 ExecStart=/usr/sbin/nginx (code=exited, status=0/SUCCESS)
+  Process: 3886 ExecStartPre=/usr/sbin/nginx -t (code=exited, status=0/SUCCESS)
+  Process: 3884 ExecStartPre=/usr/bin/rm -f /run/nginx.pid (code=exited, status=0/SUCCESS)
+ Main PID: 3890 (nginx)
+   CGroup: /system.slice/nginx.service
+           ├─3890 nginx: master process /usr/sbin/nginx
+           └─3891 nginx: worker process
 ```
 Удаляем порт
 ```
@@ -172,6 +182,19 @@ Audit2allow сформировал модуль, и сообщил нам ком
 [root@selinux ~]# semodule -i nginx.pp
 [root@selinux ~]# systemctl restart nginx
 [root@selinux ~]# systemctl status nginx
+
+[root@selinux ~]# systemctl status nginx
+● nginx.service - The nginx HTTP and reverse proxy server
+   Loaded: loaded (/usr/lib/systemd/system/nginx.service; disabled; vendor preset: disabled)
+   Active: active (running) since Tue 2023-03-14 12:10:15 UTC; 12s ago
+  Process: 3888 ExecStart=/usr/sbin/nginx (code=exited, status=0/SUCCESS)
+  Process: 3886 ExecStartPre=/usr/sbin/nginx -t (code=exited, status=0/SUCCESS)
+  Process: 3884 ExecStartPre=/usr/bin/rm -f /run/nginx.pid (code=exited, status=0/SUCCESS)
+ Main PID: 3890 (nginx)
+   CGroup: /system.slice/nginx.service
+           ├─3890 nginx: master process /usr/sbin/nginx
+           └─3891 nginx: worker process
+
 ```
 Просмотр всех установленных модулей: semodule -l  
 Для удаления модуля воспользуемся командой
