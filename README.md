@@ -202,8 +202,145 @@ Audit2allow сформировал модуль, и сообщил нам ком
 [root@selinux ~]# semodule -r nginx
 ```
 
+### 2) Обеспечение работоспособности приложения при включенном SELinux.  
+Выполним клонирование репозитория  
+```
+anton@anton-VirtualBox:~/Ansible$ git clone https://github.com/mbfx/otus-linux-adm.git
+Клонирование в «otus-linux-adm»...
+remote: Enumerating objects: 558, done.
+remote: Counting objects: 100% (456/456), done.
+remote: Compressing objects: 100% (303/303), done.
+remote: Total 558 (delta 125), reused 396 (delta 74), pack-reused 102
+Получение объектов: 100% (558/558), 1.38 МиБ | 2.26 МиБ/с, готово.
+Определение изменений: 100% (140/140), готово.
+```
+Развернём 2 ВМ с помощью vagrant
+```
+anton@anton-VirtualBox:~/Ansible/otus-linux-adm/selinux_dns_problems$ vagrant up
+Bringing machine 'ns01' up with 'virtualbox' provider...
+Bringing machine 'client' up with 'virtualbox' provider...
+==> ns01: Importing base box 'centos/7'...
+==> ns01: Matching MAC address for NAT networking...
+==> ns01: Checking if box 'centos/7' version '2004.01' is up to date...
+***
+```
+После того, как стенд развернется, проверим ВМ
+```
+anton@anton-VirtualBox:~/Ansible/otus-linux-adm/selinux_dns_problems$ vagrant status
+Current machine states:
+
+ns01                      running (virtualbox)
+client                    running (virtualbox)
+
+This environment represents multiple VMs. The VMs are all listed
+above with their current state. For more information about a specific
+VM, run `vagrant status NAME`.
+```
+Подключимся к клиенту
+```
+anton@anton-VirtualBox:~/Ansible/otus-linux-adm/selinux_dns_problems$ vagrant ssh client
+Last login: Tue Mar 28 15:56:31 2023 from 10.0.2.2
+###############################
+### Welcome to the DNS lab! ###
+###############################
+
+- Use this client to test the enviroment
+- with dig or nslookup. Ex:
+    dig @192.168.50.10 ns01.dns.lab
+
+- nsupdate is available in the ddns.lab zone. Ex:
+    nsupdate -k /etc/named.zonetransfer.key
+    server 192.168.50.10
+    zone ddns.lab 
+    update add www.ddns.lab. 60 A 192.168.50.15
+    send
+
+- rndc is also available to manage the servers
+    rndc -c ~/rndc.conf reload
+
+###############################
+### Enjoy! ####################
+###############################
+```
+Попробуем внести изменения в зону
+```
+[vagrant@client ~]$ nsupdate -k /etc/named.zonetransfer.key
+> server 192.168.50.10
+> zone ddns.lab
+> update add www.ddns.lab. 60 A 192.168.50.15
+> send
+update failed: SERVFAIL
+```
+Не удалось. Смотрим логи SELinux
+```
+[vagrant@client ~]$ sudo -i
+[root@client ~]# cat /var/log/audit/audit.log | audit2why
+[root@client ~]# 
+```
+ошибок нет, тогда смотрим на стороне сервера
+```
+anton@anton-VirtualBox:~/Ansible/otus-linux-adm/selinux_dns_problems$ vagrant ssh ns01
+Last login: Tue Mar 28 15:50:00 2023 from 10.0.2.2
+[vagrant@ns01 ~]$ sudo -i
+[root@ns01 ~]# cat /var/log/audit/audit.log | audit2why
+type=AVC msg=audit(1680018601.749:1867): avc:  denied  { write } for  pid=5071 comm="isc-worker0000" name="named" dev="sda1" ino=67542992 scontext=system_u:system_r:named_t:s0 tcontext=system_u:object_r:named_zone_t:s0 tclass=dir permissive=0
+
+        Was caused by:
+        The boolean named_write_master_zones was set incorrectly. 
+        Description:
+        Allow named to write master zones
+
+        Allow access by executing:
+        # setsebool -P named_write_master_zones 1
+type=AVC msg=audit(1680021420.564:1901): avc:  denied  { create } for  pid=5071 comm="isc-worker0000" name="named.ddns.lab.view1.jnl" scontext=system_u:system_r:named_t:s0 tcontext=system_u:object_r:etc_t:s0 tclass=file permissive=0
+
+        Was caused by:
+                Missing type enforcement (TE) allow rule.
+
+                You can use audit2allow to generate a loadable module to allow this access.
+```
+Видим, что ошибка в контексте безопасности. Вместо типа named_t используется тип etc_t   
+Проверим данную проблему в каталоге /etc/named
+```
+[root@ns01 ~]# ls -laZ /etc/named
+drw-rwx---. root named system_u:object_r:etc_t:s0       .
+drwxr-xr-x. root root  system_u:object_r:etc_t:s0       ..
+drw-rwx---. root named unconfined_u:object_r:etc_t:s0   dynamic
+-rw-rw----. root named system_u:object_r:etc_t:s0       named.50.168.192.rev
+-rw-rw----. root named system_u:object_r:etc_t:s0       named.dns.lab
+-rw-rw----. root named system_u:object_r:etc_t:s0       named.dns.lab.view1
+-rw-rw----. root named system_u:object_r:etc_t:s0       named.newdns.lab
+```
+Видим, что контекст безопасности неправильный. Проблема заключается в том, что конфигурационные файлы лежат в другом каталоге.   
+Смотрим в каком каталоги должны лежать, файлы, чтобы на них распространялись правильные политики SELinux
+```
+[root@ns01 ~]# sudo semanage fcontext -l | grep named
+/etc/rndc.*                                        regular file       system_u:object_r:named_conf_t:s0 
+/var/named(/.*)?                                   all files          system_u:object_r:named_zone_t:s0 
+/etc/unbound(/.*)?                                 all files          system_u:object_r:named_conf_t:s0 
+***
+```
+Изменим тип контекста безопасности для каталога /etc/named
+```
+[root@ns01 ~]# sudo chcon -R -t named_zone_t /etc/named
+[root@ns01 ~]# ls -laZ /etc/named
+drw-rwx---. root named system_u:object_r:named_zone_t:s0 .
+drwxr-xr-x. root root  system_u:object_r:etc_t:s0       ..
+drw-rwx---. root named unconfined_u:object_r:named_zone_t:s0 dynamic
+-rw-rw----. root named system_u:object_r:named_zone_t:s0 named.50.168.192.rev
+-rw-rw----. root named system_u:object_r:named_zone_t:s0 named.dns.lab
+-rw-rw----. root named system_u:object_r:named_zone_t:s0 named.dns.lab.view1
+-rw-rw----. root named system_u:object_r:named_zone_t:s0 named.newdns.lab
+```
+Попробуем снова внести изменения с клиента
+```
+
+```
 
 
 
+```
+
+```
 
 
