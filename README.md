@@ -334,8 +334,77 @@ drw-rwx---. root named unconfined_u:object_r:named_zone_t:s0 dynamic
 ```
 Попробуем снова внести изменения с клиента
 ```
-
+[vagrant@client ~]$ nsupdate -k /etc/named.zonetransfer.key
+> server 192.168.50.10
+> zone ddns.lab
+> update add www.ddns.lab. 60 A 192.168.50.15
+> send
+update failed: SERVFAIL
+> quit
 ```
+Смотрим лог на сервере
+```
+[root@ns01 ~]# audit2why < /var/log/audit/audit.log
+type=AVC msg=audit(1680029535.364:1928): avc:  denied  { write } for  pid=5078 comm="isc-worker0000" name="dynamic" dev="sda1" ino=5325747 scontext=system_u:system_r:named_t:s0 tcontext=unconfined_u:object_r:named_zone_t:s0 tclass=dir permissive=0
+
+        Was caused by:
+        The boolean named_write_master_zones was set incorrectly. 
+        Description:
+        Allow named to write master zones
+
+        Allow access by executing:
+        # setsebool -P named_write_master_zones 1
+[root@ns01 ~]# audit2allow --debug < /var/log/audit/audit.log
+
+
+#============= named_t ==============
+
+#!!!! This avc can be allowed using the boolean 'named_write_master_zones'
+allow named_t named_zone_t:dir write;
+```
+Выполняем рекомендованную команду audit2allow
+```
+[root@ns01 ~]# setsebool -P named_write_master_zones=1
+```
+Попробуем снова внести изменения с клиента
+```
+[vagrant@client ~]$ nsupdate -k /etc/named.zonetransfer.key
+> server 192.168.50.10
+> zone ddns.lab
+> update add www.ddns.lab. 60 A 192.168.50.15
+> send
+> quit
+```
+Все удачно, проверяем
+```
+[vagrant@client ~]$ dig www.ddns.lab
+
+; <<>> DiG 9.11.4-P2-RedHat-9.11.4-26.P2.el7_9.13 <<>> www.ddns.lab
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 62891
+;; flags: qr aa rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 1, ADDITIONAL: 2
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 4096
+;; QUESTION SECTION:
+;www.ddns.lab.                  IN      A
+
+;; ANSWER SECTION:
+www.ddns.lab.           60      IN      A       192.168.50.15
+
+;; AUTHORITY SECTION:
+ddns.lab.               3600    IN      NS      ns01.dns.lab.
+
+;; ADDITIONAL SECTION:
+ns01.dns.lab.           3600    IN      A       192.168.50.10
+
+;; Query time: 49 msec
+;; SERVER: 192.168.50.10#53(192.168.50.10)
+;; WHEN: Tue Mar 28 19:33:24 UTC 2023
+;; MSG SIZE  rcvd: 96
+```
+изменения применились. Перезагружаемся
 
 
 
